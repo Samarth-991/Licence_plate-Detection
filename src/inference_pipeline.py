@@ -1,10 +1,9 @@
 import logging
 import numpy as np
 import cv2
-import easyocr
-from skimage.segmentation import clear_border
-import onnxruntime
 import logging as log
+import string
+import difflib
 
 
 class Inference_engine:
@@ -16,23 +15,21 @@ class Inference_engine:
         self.detector_conf = detector_conf
         self.iou_thresh = iou_thresh
         self.nlp_conf = nlp_conf
+
         # flag for detection
         self.success_detection = False
         self.txt_data = None
+
         # Load the model once in the memory
         self.session = detector_model
         self.en_reader = nlp_model[0]
         self.ar_reader = nlp_model[1]
-
-        # call function to get licence_plate info
-        # self.get_licenceplate_info()
 
     def get_licenceplate_info(self):
         IN_IMAGE_H = self.session.get_inputs()[0].shape[2]
         IN_IMAGE_W = self.session.get_inputs()[0].shape[3]
 
         decoded_img = self.decode_img(self.input_img, shape=(IN_IMAGE_H, IN_IMAGE_W))
-
         detections = self.detect(decoded_img)
         boxes = self.post_processing(detections, conf_thresh=self.detector_conf,
                                      nms_thresh=self.iou_thresh)
@@ -41,15 +38,18 @@ class Inference_engine:
             logging.info("No Detections from model")
 
         elif not self.check_out_of_bounds():
-            img_alpr = self.input_img[self.bounding_cords[1] - 20:self.bounding_cords[3] + 5,
-                       self.bounding_cords[0] - 20:self.bounding_cords[2] + 20]
-
-            self.txt_data = self.NLP_model(img_alpr, nlp_confidence=self.nlp_conf)
-            if len(self.txt_data) == 0:
-                img_alpr_mod = self.enhance_image(img_alpr)
-                mod_txt_data = self.NLP_model(img_alpr_mod, nlp_confidence=self.nlp_conf)
-                self.txt_data = mod_txt_data
+            cropped_alpr = self.input_img[self.bounding_cords[1]:self.bounding_cords[3],
+                           self.bounding_cords[0]:self.bounding_cords[2]]
+            #             lisc_plate_img = self.enhance_image(cropped_alpr.copy())
+            self.txt_data = self.NLP_model(cropped_alpr.copy(), nlp_confidence=self.nlp_conf)
+            print("final string", self.txt_data)
         return self.txt_data
+
+    def enhance_image(self, crop_image, alpha=1.5, beta=0):
+        gray_image = cv2.cvtColor(crop_image, cv2.COLOR_RGB2GRAY)
+        blur_img = cv2.GaussianBlur(gray_image, (5, 5), 0)
+        adpt_img = cv2.adaptiveThreshold(blur_img, 200, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 7, 3)
+        return adpt_img
 
     def check_out_of_bounds(self):
         out_of_bounds = False
@@ -58,24 +58,52 @@ class Inference_engine:
             out_of_bounds = True
         return out_of_bounds
 
-    def enhance_image(self, crop_image):
-        gray = cv2.cvtColor(crop_image, cv2.COLOR_RGB2GRAY)
-        rectKern = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 10))
-        blackhat = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, rectKern)
-        blackhat = clear_border(blackhat)
-        return blackhat
+    def evaluate_text(self, results_en, results_ar):
+        ocr_data = []
+        text_string = []
+        num_data = []
+        nval = None
+        # get results
+        text_en = [r[1] for r in results_en]
+        digt_en = [r[1][:5] for r in results_en if r[1].isdigit() and len(r[1]) > 4]
+        # find Single Char
+        single_chars = [s for s in results_en if len(s[1]) == 1]
+        if len(single_chars) > 0:
+            singlchar_array = np.asarray(single_chars)
+            nval = singlchar_array[np.argmax(singlchar_array[:, 0])][1]
+        # find numeric data from english text
+        digits = [txt[:5] for txt in text_en if txt[:5].isdigit() and len(txt) > 4]
+        num_data = list(set(digits).intersection(digt_en))
+        if len(num_data) == 0:
+            num_data = digits
+        num_data.sort(reverse=True)
+        # evaluate Arabic text
+        text_ar = [r[1].translate({ord(i): None for i in "':!?+|\/}{*%&#()$-_=[]^., "}) for r in results_ar if
+                   not any(c.isdigit() for c in r[1])]
+        # find closest match to DUBAI
+        if difflib.get_close_matches('DUBAI', text_en) or any('DUBAI' in word for word in text_en):
+            text_string.append('DUBAI')
+        # find closest match to UAE
+        elif difflib.get_close_matches('UAE', text_en) or any('UAE' in word for word in text_en):
+            text_string.append('UAE')
+        # find closest match to AD
+        elif difflib.get_close_matches('AD', text_en) or any('AD' in word for word in text_en):
+            text_string.append("AD")
+        ocr_data = num_data + text_string
+        if nval is not None:
+            ocr_data.insert(0, nval)
+        ocr_data = list(ocr_data + list(set(text_ar) - set(ocr_data)))
+        return ocr_data
 
     def NLP_model(self, cropped_img, nlp_confidence=0.0):
-        nlp_data = []
+        en_meta_data = []
         # run NLP model on cropped image
-        results_en = self.en_reader.readtext(cropped_img)
+        results_en = self.en_reader.readtext(cropped_img, allowlist=string.digits + string.ascii_uppercase)
+        for rlt in results_en:
+            en_meta_data.append([rlt[-1], rlt[-2]])
         results_ar = self.ar_reader.readtext(cropped_img)
-        # get results
-        text_en = [r[-2].translate({ord(i): None for i in "':!?+|\/}{()*&#%-_= "}) for r in results_en]
-        text_ar = [r[-2].translate({ord(i): None for i in "':!?+|\/}{%&()-_= "}) for r in results_ar ]
-
-        diff_txt = set(text_ar) - set(text_en)
-        nlp_data = list(text_en + list(diff_txt))
+        nlp_data = self.evaluate_text(en_meta_data, results_ar)
+        nlp_data = list(filter(str.strip, nlp_data))
         return nlp_data
 
     def detect(self, decoded_image):
@@ -173,21 +201,3 @@ class Inference_engine:
         except IOError as e:
             log.error('{}! Unable to read image'.format(e))
         return output_img
-
-
-if __name__ == '__main__':
-    # Add object detector models
-    Model_path = 'yolov4_1_3_320_320_static.onnx'
-    model = onnxruntime.InferenceSession(Model_path)
-    # add NLP Models
-    en_model = easyocr.Reader(['en'])
-    ar_model = easyocr.Reader(['ar'])
-    nlp_models = [en_model, ar_model]
-    # image path
-    img_path = '/home/tandonsa/PycharmProjects/test_gpu/Licence_plate/dataset/vehicleplates/IMG-20210610-WA0044.jpg'
-    input_img = cv2.imread(img_path)
-    input_img = cv2.cvtColor(input_img, cv2.COLOR_BGR2RGB)
-
-    # create Object instance
-    model_infer = Inference_engine(input_img, model, nlp_models)
-    print(model_infer.get_licenceplate_info())

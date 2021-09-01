@@ -1,38 +1,73 @@
 from flask import Flask, request, jsonify
 import easyocr
 import onnxruntime
-from inference_pipeline import Inference_engine
+from src.inference_pipeline import Inference_engine
 import cv2
+import os
+from PIL import Image
 import numpy as np
 import base64
-
+from datetime import datetime
+BASE_PATH = os.path.dirname(os.path.abspath(__file__))
 app = Flask(__name__)
 
 
 # Add object detector models
-Model_path = 'yolov4_1_3_320_320_static.onnx'
+Model_path = os.path.join(BASE_PATH,'src/model/yolov4_1_3_320_320_static.onnx')
 model = onnxruntime.InferenceSession(Model_path)
 # add NLP Models
 en_model = easyocr.Reader(['en'])
 ar_model = easyocr.Reader(['ar'])
 nlp_models = [en_model, ar_model]
-
+artifacts_path = os.path.join(BASE_PATH,'artifacts/dump.txt')
 
 @app.route('/')
 def base_route():
     return 'API is running...'
 
-@app.route('/process', methods=['POST'])
-def process():
+@app.route('/base_get',methods=['GET'])
+def base_get():
+    return 'Running'
+"""
+This will infer the image if image request 
+is in the form of File format.Image is saved 
+temporarly in the /tmp/ folder and is used to 
+infer from there.
+"""
+@app.route('/filestream',methods=['POST'])
+def filestream():
+    payload =None 
+    img_string = request.files['img_string']
+    # convert PIL image to RGB format
+    input_img = np.array(Image.open(img_string.stream).convert('RGB')) 
+    
+    # create Object instance
+    model_infer = Inference_engine(input_img, model, nlp_models,detector_conf=0.5,nlp_conf=0.7,iou_thresh=0.5)
+    payload = model_infer.get_licenceplate_info()
+    if payload is not None:
+        with open(artifacts_path,mode='a+') as afd:
+            afd.write("{}".format(datetime.now()))
+            [afd.write(",{}".format(data)) for data in payload]    
+            afd.write('\n')
+    return jsonify({ 'data': payload })
+
+@app.route('/predict', methods=['POST'])
+def predict():
+    payload = None
     img_string = request.json['img_string']
     jpg_original = base64.b64decode(img_string)
     jpg_as_np = np.frombuffer(jpg_original, dtype=np.uint8)
     input_img = cv2.imdecode(jpg_as_np, flags=1)
+    input_img = cv2.cvtColor(input_img,cv2.COLOR_BGR2RGB)
     
     # create Object instance
     model_infer = Inference_engine(input_img, model, nlp_models)
     payload = model_infer.get_licenceplate_info()
-
+    if payload is not None:
+        with open(artifacts_path,mode='a+') as afd:
+            afd.write("{}".format(datetime.now()))
+            [afd.write(",{}".format(data)) for data in payload]    
+            afd.write('\n')
     return jsonify({ 'data': payload })
 
 
@@ -50,5 +85,5 @@ def handle_error(err):
     return jsonify(response), status_code
 
 
-# if __name__ == '__main__':
-#     app.run(debug=True)
+if __name__ == '__main__':
+        app.run(debug=False,host='0.0.0.0',port=int(os.environ.get("PORT",80)))
