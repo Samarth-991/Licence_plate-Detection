@@ -1,13 +1,11 @@
-import logging
 import numpy as np
 import cv2
-import logging as log
 import string
-import difflib
-
+from src.utils import infer_utils
 
 class Inference_engine:
-    def __init__(self, input_image, detector_model, nlp_model, detector_conf=0.1, nlp_conf=0.4, iou_thresh=0.5):
+    def __init__(self, input_image, detector_model, nlp_model, detector_conf=0.1, nlp_conf=0.4, iou_thresh=0.5,
+                 debug=False):
         self.input_img = input_image
         self.input_img_width = self.input_img.shape[1]
         self.input_img_height = self.input_img.shape[0]
@@ -15,41 +13,35 @@ class Inference_engine:
         self.detector_conf = detector_conf
         self.iou_thresh = iou_thresh
         self.nlp_conf = nlp_conf
-
         # flag for detection
         self.success_detection = False
         self.txt_data = None
-
+        # get logger
+        infer_utils.get_ConfigLogger(debug)
         # Load the model once in the memory
         self.session = detector_model
         self.en_reader = nlp_model[0]
         self.ar_reader = nlp_model[1]
 
-    def get_licenceplate_info(self):
+    def get_licenceplate_info(self, run_detector=True):
         IN_IMAGE_H = self.session.get_inputs()[0].shape[2]
         IN_IMAGE_W = self.session.get_inputs()[0].shape[3]
-
-        decoded_img = self.decode_img(self.input_img, shape=(IN_IMAGE_H, IN_IMAGE_W))
-        detections = self.detect(decoded_img)
-        boxes = self.post_processing(detections, conf_thresh=self.detector_conf,
-                                     nms_thresh=self.iou_thresh)
-        self.bounding_cords = self.decode_boxes(boxes)
-        if self.bounding_cords is None:
-            logging.info("No Detections from model")
-
-        elif not self.check_out_of_bounds():
-            cropped_alpr = self.input_img[self.bounding_cords[1]:self.bounding_cords[3],
-                           self.bounding_cords[0]:self.bounding_cords[2]]
-            #             lisc_plate_img = self.enhance_image(cropped_alpr.copy())
-            self.txt_data = self.NLP_model(cropped_alpr.copy(), nlp_confidence=self.nlp_conf)
-            print("final string", self.txt_data)
+        if run_detector:  # if user select to run YOLO Detector
+            decoded_img = self.decode_img(self.input_img, shape=(IN_IMAGE_H, IN_IMAGE_W))
+            if decoded_img is not None:
+                detections = self.detect(decoded_img)
+                boxes = self.post_processing(detections, conf_thresh=self.detector_conf, nms_thresh=self.iou_thresh)
+                self.bounding_cords = self.decode_boxes(boxes)
+                if self.bounding_cords is None:  # if detector is not able to get bounding boxes
+                    self.txt_data = None
+                    logging.warning("No Detections found ")
+                elif not self.check_out_of_bounds():
+                    cropped_alpr = self.input_img[self.bounding_cords[1]:self.bounding_cords[3],
+                                   self.bounding_cords[0]:self.bounding_cords[2]]
+                    self.txt_data = self.NLP_model(cropped_alpr.copy(), nlp_confidence=self.nlp_conf)
+        else:
+            self.txt_data = self.NLP_model(self.input_img, nlp_confidence=self.nlp_conf)
         return self.txt_data
-
-    def enhance_image(self, crop_image, alpha=1.5, beta=0):
-        gray_image = cv2.cvtColor(crop_image, cv2.COLOR_RGB2GRAY)
-        blur_img = cv2.GaussianBlur(gray_image, (5, 5), 0)
-        adpt_img = cv2.adaptiveThreshold(blur_img, 200, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 7, 3)
-        return adpt_img
 
     def check_out_of_bounds(self):
         out_of_bounds = False
@@ -58,53 +50,19 @@ class Inference_engine:
             out_of_bounds = True
         return out_of_bounds
 
-    def evaluate_text(self, results_en, results_ar):
-        ocr_data = []
-        text_string = []
-        num_data = []
-        nval = None
-        # get results
-        text_en = [r[1] for r in results_en]
-        digt_en = [r[1][:5] for r in results_en if r[1].isdigit() and len(r[1]) > 4]
-        # find Single Char
-        single_chars = [s for s in results_en if len(s[1]) == 1]
-        if len(single_chars) > 0:
-            singlchar_array = np.asarray(single_chars)
-            nval = singlchar_array[np.argmax(singlchar_array[:, 0])][1]
-        # find numeric data from english text
-        digits = [txt[:5] for txt in text_en if txt[:5].isdigit() and len(txt) > 4]
-        num_data = list(set(digits).intersection(digt_en))
-        if len(num_data) == 0:
-            num_data = digits
-        num_data.sort(reverse=True)
-        # evaluate Arabic text
-        text_ar = [r[1].translate({ord(i): None for i in "':!?+|\/}{*%&#()$-_=[]^., "}) for r in results_ar if
-                   not any(c.isdigit() for c in r[1])]
-        # find closest match to DUBAI
-        if difflib.get_close_matches('DUBAI', text_en) or any('DUBAI' in word for word in text_en):
-            text_string.append('DUBAI')
-        # find closest match to UAE
-        elif difflib.get_close_matches('UAE', text_en) or any('UAE' in word for word in text_en):
-            text_string.append('UAE')
-        # find closest match to AD
-        elif difflib.get_close_matches('AD', text_en) or any('AD' in word for word in text_en):
-            text_string.append("AD")
-        ocr_data = num_data + text_string
-        if nval is not None:
-            ocr_data.insert(0, nval)
-        ocr_data = list(ocr_data + list(set(text_ar) - set(ocr_data)))
-        return ocr_data
-
     def NLP_model(self, cropped_img, nlp_confidence=0.0):
         en_meta_data = []
         # run NLP model on cropped image
         results_en = self.en_reader.readtext(cropped_img, allowlist=string.digits + string.ascii_uppercase)
+        # add probabilities in english as well
         for rlt in results_en:
             en_meta_data.append([rlt[-1], rlt[-2]])
         results_ar = self.ar_reader.readtext(cropped_img)
-        nlp_data = self.evaluate_text(en_meta_data, results_ar)
+
+        nlp_data, raw_data = infer_utils.evaluate_data(en_meta_data, results_ar)
         nlp_data = list(filter(str.strip, nlp_data))
-        return nlp_data
+        nlp_data.sort(key=len)
+        return [nlp_data, raw_data]
 
     def detect(self, decoded_image):
         input_name = self.session.get_inputs()[0].name
@@ -199,5 +157,5 @@ class Inference_engine:
             output_img = np.expand_dims(trp_img, axis=0)
             output_img /= 255.0
         except IOError as e:
-            log.error('{}! Unable to read image'.format(e))
+            raise('{}! Unable to read image'.format(e))
         return output_img

@@ -47,10 +47,12 @@ dependencies:
   - libxml2=2.9.12=h03d6c58_0
   - ncurses=6.2=he6710b0_1
   - numpy=1.19.5=py36hfc0c790_2
+  - opencv=3.4.2=py36h6fd60c2_1
   - openssl=1.1.1k=h7f98852_0
   - pcre=8.45=h9c3ff4c_0
   - pixman=0.38.0=h516909a_1003
   - pthread-stubs=0.4=h36c2ea0_1001
+  - py-opencv=3.4.2=py36hb342d67_1
   - python=3.6.13=h12debd9_1
   - python_abi=3.6=2_cp36m
   - readline=8.1=h27cfd23_0
