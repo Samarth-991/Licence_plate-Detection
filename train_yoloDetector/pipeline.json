@@ -1,0 +1,38 @@
+{
+  "Data":
+      {
+        "classes": ["license"],
+        "data_dir":"dataset",
+        "network_shape": [320,320],
+        "model_data":"model_data",
+        "num_classes": 1,
+        "obj_data":"obj.data",
+        "obj_names":"obj.names",
+        "train_txt":"train.txt",
+        "val_txt":"val.txt"
+      },
+
+  "params": {
+        "train": 0.9,
+        "valid": 0.1,
+        "ext": ".jpg",
+        "seed": 47
+    },
+  "Model":{
+          "yolov4_cfg": "yolov4-custom.cfg",
+          "Darknet_path":"darknet",
+          "Yolo_weights":"yolov4.conv.137",
+          "Backup_folder": "models"
+      },
+  "Inference": {
+            "weights": "last",
+            "cnf_thesh": "0.50",
+            "iou_thresh": "0.20",
+            "results": "results"
+             },
+  "ONNX2TF":{
+        "onnx_model": "yolov4_1_3_320_320_static.onnx",
+        "out_path": "tf_weights"
+        }
+
+  }
