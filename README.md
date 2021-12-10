@@ -31,6 +31,11 @@ using docker file environment can be created with command "docker build -t ocr-m
 
 * Use test.py to run the test locally. Toggle between the Local Endpoint or Docker Endpoint and pass the image path on a separate terminal window.
 
+[Results for Yolo Object Detection]
+========  
+------------
+![Image text](https://github.com/Samarth-991/Licence_plate-Detection/blob/main/train_yoloDetector/predicted.jpg)
+
 ### Project Details 
 * Version:3.6.1
 * Author : samarth Tandon
