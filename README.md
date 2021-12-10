@@ -1,8 +1,8 @@
-# README #
+# License Plate Detection with OCR Integration
 
-This README would normally document whatever steps are necessary to get your application up and running.
+The repository uses Yolo-object detection for detecting license plates and use Easy-OCR engine to extract ocr information.
 
-### What is this repository for ?###
+### What is this repository for?
 
 * OCR-License plate is a Detection and Character recognition repo.The repo consists of pre-trained models for Auto Licence plate detecion and OCR model is trained specifically for Arabic and English language.OCR Plate recognition API accepts binary image and toogle argument for detector.
 
